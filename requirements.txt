@@ -1,0 +1,4 @@
+fastapi
+pyotp
+pydotenv
+pyjwt
