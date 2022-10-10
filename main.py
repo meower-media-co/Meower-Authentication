@@ -4,26 +4,18 @@ from dotenv import load_dotenv
 import os
 import requests
 
-# Load JWT private key
-with open("jwt.pem", "r") as f:
-    os.environ["JWT_PRIVATE"] = f.read()
-
-# Load JWT public key
-with open("jwt.pem.pub", "r") as f:
-    os.environ["JWT_PUBLIC"] = f.read()
-
 # Load environment variables
 load_dotenv()
 
 if "MAIN_API" in os.environ:
-    main_api_req = requests.get(f"{os.environ['MAIN_API']}/auth/test")
+    main_api_req = requests.get(f"{os.environ['MAIN_API']}/")
     if main_api_req.status_code == 200:
         # Initialize API object
         app = FastAPI()
 
         # Import and attatch middleware
-        from routers.middleware import process_time_header
-        app.add_middleware(BaseHTTPMiddleware, dispatch=process_time_header)
+        from routers.middleware import middleware_dispatch
+        app.add_middleware(BaseHTTPMiddleware, dispatch=middleware_dispatch)
 
         # Import and attatch routers
         from routers import authenticate, email

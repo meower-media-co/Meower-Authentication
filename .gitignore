@@ -1,6 +1,4 @@
 __pycache__
 .env
-*.pem
-*.pub
 *.db
 *.rdb
