@@ -14,17 +14,6 @@ ALLOWED_USERNAME_CHARS += string.digits
 # Incremental counter for snowflakes
 id_increment = 0
 
-class Codes:
-    """
-    Status codes throughout the authentication API.
-    """
-
-    OK = 1
-    Exists = 2
-    DoesNotExist = 3
-    IllegalCharacters = 4
-    InvalidCredentials = 5
-
 class PrintColors:
     """
     Nice colors used for when printing logs to the console.

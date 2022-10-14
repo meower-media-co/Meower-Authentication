@@ -1,5 +1,5 @@
 from util.database import db
-from util.supporter import Codes, log, add_log, snowflake, check_username
+from util.supporter import log, add_log, snowflake
 from hashlib import sha256
 from passlib.hash import bcrypt
 from pyotp import TOTP
@@ -25,7 +25,7 @@ class Account:
             self.webauthn = json.loads(userdata[4])
             self.totp = json.loads(userdata[5])
             self.recovery = json.loads(userdata[6])
-            self.locked = userdata[7]
+            self.lock_status = userdata[7]
         else:
             # Create default userdata
             self.id = None
@@ -35,18 +35,10 @@ class Account:
             self.webauthn = []
             self.totp = []
             self.recovery = []
-            self.locked = 0
+            self.lock_status = 0
 
 
     def create(self, username, display_name, password, child):
-        # Make sure account does not already exist
-        if self._exists:
-            return Codes.Exists
-
-        # Make sure username is valid
-        if check_username(username):
-            return Codes.IllegalCharacters
-
         # Update attributes on account object
         self._exists = True
         self.id = snowflake()
@@ -59,7 +51,7 @@ class Account:
             "username": display_name,
             "username_lower": display_name.lower(),
             "created": int(time.time()),
-            "flags": 0,
+            "flags": (1 if child else 0),
             "admin": 0,
             "config": 0,
             "custom_theme": {},
@@ -68,19 +60,8 @@ class Account:
         }, {"writeConcern": {"w": "majority", "wtimeout": 5000}})
 
         # Insert account into SQLite database
-        db.cur.execute("INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?, ?)", (self.id, self.username, self.email, self.password, self.webauthn, self.totp, self.recovery,))
+        db.cur.execute("INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (self.id, self.username, self.email, self.password, self.webauthn, self.totp, self.recovery, self.lock_status,))
         db.con.commit()
-
-        return True
-
-
-    def send_email(self, subject, body):
-        # Make sure email is set
-        if self.email is None:
-            return False
-
-        # Send email
-        pass # TODO: Add email sending
 
         return True
 
@@ -196,13 +177,21 @@ class Account:
         return False
 
 
+    def change_lock_status(self, mode:int):
+        self.lock_status = mode
+        db.cur.execute("UPDATE accounts SET lock_status = ? WHERE id = ?", (self.lock_status, self.id,))
+        db.con.commit()
+
+        return True
+
+
     def generate_session(self, client):
         # Create session snowflake
         session_id = snowflake()
 
         # Create auth and main token secrets
-        auth_token = secrets.token_urlsafe(128)
-        main_token = secrets.token_urlsafe(64)
+        auth_token = ("meow-auth_" + secrets.token_urlsafe(128))
+        main_token = ("meow-main_" + secrets.token_urlsafe(64))
 
         # Create auth and main token hashes
         hashed_auth_token = sha256(auth_token.encode()).hexdigest()
@@ -213,7 +202,12 @@ class Account:
         db.con.commit()
 
         # Insert main token into Mongo database
-        db.mongo.sessions.insert_one({"_id": session_id, "token": hashed_main_token, "user": self.id, "ttl": (time.time() + 3600)}, {"writeConcern": {"w": "majority", "wtimeout": 5000}})
+        db.mongo.sessions.insert_one({
+            "_id": session_id,
+            "token": hashed_main_token,
+            "user": self.id,
+            "ttl": (time.time() + 3600)
+        }, {"writeConcern": {"w": "majority", "wtimeout": 5000}})
 
         # Return auth and main token
         return auth_token, main_token
@@ -221,7 +215,7 @@ class Account:
 
     def generate_mfa_token(self):
         # Create token secret
-        token = secrets.token_urlsafe(128)
+        token = ("meow-mfa_" + secrets.token_urlsafe(128))
 
         # Create token hash
         hashed_token = sha256(token.encode()).hexdigest()
@@ -236,13 +230,13 @@ class Account:
 
     def generate_email_token(self, action, ttl):
         # Create token secret
-        token = secrets.token_urlsafe(128)
+        token = ("meow-email_" + secrets.token_urlsafe(128))
 
         # Create token hash
         hashed_token = sha256(token.encode()).hexdigest()
 
         # Insert token into SQLite database
-        db.cur.execute("INSERT INTO email_links VALUES (?, ?, ?, ?, ?, ?)", (snowflake(), hashed_token, self.id, self.email, action, time.time(), (int(time.time()) + ttl)))
+        db.cur.execute("INSERT INTO email_links VALUES (?, ?, ?, ?, ?)", (hashed_token, self.id, self.email, action, (int(time.time()) + ttl)))
         db.con.commit()
 
         # Return token

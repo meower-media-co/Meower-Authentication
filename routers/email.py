@@ -1,8 +1,8 @@
 from util.database import db
 from util.accounts import acc_from_id
-from util.sessions import get_email_token
+from util.sessions import get_email_link, revoke_email_link
 from fastapi import APIRouter, HTTPException
-from util.schemas.email import ResetPassword
+from util.schemas.email import ResetPassword, VerifyChild
 
 
 router = APIRouter(
@@ -13,57 +13,95 @@ router = APIRouter(
 
 @router.get("/")
 async def email_link_info(token:str):
-    link_info = get_email_token(token)
-
-    if link_info is not None:
-        raise HTTPException(status=401, detail="Invalid email token.")
-    else:
-        return link_info
+    return get_email_link(token)
 
 
-@router.post("/verify-email")
-async def verify_email(token:str):
-    link_info = get_email_token(token)
+@router.delete("/")
+async def delete_email_link(token:str):
+    # Get email link info
+    link_info = get_email_link(token)
+    if link_info is None:
+        raise HTTPException(status=401, detail="Invalid email token")
 
-    if (link_info is None) or (link_info["action"] != "verify-email"):
-        raise HTTPException(status=401, detail="Invalid email token.")
-
-    user = acc_from_id(link_info["userid"])
-    user.update_email(link_info["email"])
-
-    db.cur.execute("DELETE FROM email_links WHERE token = ?", (token,))
-    db.con.commit()
+    # Revoke email link
+    revoke_email_link(link_info["hash"])
 
     return "OK"
 
 
+@router.post("/verify-email")
+async def verify_email(token:str):
+    # Get email link info
+    link_info = get_email_link(token)
+    if (link_info is None) or (link_info["action"] != "verify_email"):
+        raise HTTPException(status=401, detail="Invalid email token")
+
+    # Update user's email
+    user = acc_from_id(link_info["userid"])
+    user.update_email(link_info["email"])
+
+    # Update user flags
+    mongo_user = db.mongo.users.find_one({"_id": user.id})
+    if (mongo_user["flags"] & (1 << 2)) == 0:
+        mongo_user["flags"] |= (1 << 2)
+        db.mongo.users.update_one({"_id": user.id}, {"$set": {"flags": mongo_user["flags"]}})
+
+    # Revoke email link
+    revoke_email_link(link_info["hash"])
+
+    return "OK"
+
+
+@router.post("/verify-child")
+async def verify_child(token:str, body:VerifyChild):
+    # Get email link info
+    link_info = get_email_link(token)
+    if (link_info is None) or (link_info["action"] != "verify_child"):
+        raise HTTPException(status=401, detail="Invalid email token")
+
+    # Get user
+    user = acc_from_id(link_info["userid"])
+
+    # Update user flags
+    mongo_user = db.mongo.users.find_one({"_id": user.id})
+    if (mongo_user["flags"] & (1 << 1)) == 0:
+        mongo_user["flags"] |= (1 << 1)
+        db.mongo.users.update_one({"_id": user.id}, {"$set": {"flags": mongo_user["flags"]}})
+    
+    # Revoke email link
+    revoke_email_link(link_info["hash"])
+
+    return "OK"
+
 @router.post("/reset-password")
 async def reset_password(token:str, body:ResetPassword):
-    link_info = get_email_token(token)
+    # Get email link info
+    link_info = get_email_link(token)
+    if (link_info is None) or (link_info["action"] != "reset_password"):
+        raise HTTPException(status=401, detail="Invalid email token")
 
-    if (link_info is None) or (link_info["action"] != "reset-password"):
-        raise HTTPException(status=401, detail="Invalid email token.")
-
+    # Update user's password
     user = acc_from_id(link_info["userid"])
     user.update_password(body.new_password)
 
-    db.cur.execute("DELETE FROM email_links WHERE token = ?", (token,))
-    db.con.commit()
+    # Revoke email link
+    revoke_email_link(link_info["hash"])
 
     return "OK"
 
 
 @router.post("/revert-email")
 async def revert_email(token:str):
-    link_info = get_email_token(token)
+    # Get email link info
+    link_info = get_email_link(token)
+    if (link_info is None) or (link_info["action"] != "revert_email"):
+        raise HTTPException(status=401, detail="Invalid email token")
 
-    if (link_info is None) or (link_info["action"] != "verify-email"):
-        raise HTTPException(status=401, detail="Invalid email token.")
-
+    # Update user's email
     user = acc_from_id(link_info["userid"])
     user.update_email(link_info["email"])
 
-    db.cur.execute("DELETE FROM email_links WHERE token = ?", (token,))
-    db.con.commit()
+    # Revoke email link
+    revoke_email_link(link_info["hash"])
 
     return "OK"

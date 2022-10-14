@@ -57,8 +57,7 @@ class Database:
         # Create sessions collection
         if "sessions" not in self.mongo.list_collection_names():
             for index_name in [
-                "_id",
-                "token"
+                "_id"
             ]:
                 self.mongo.sessions.create_index(index_name)
 
@@ -73,7 +72,8 @@ class Database:
                     password TEXT,
                     webauthn TEXT NOT NULL,
                     totp_secret TEXT NOT NULL,
-                    mfa_recovery TEXT NOT NULL
+                    mfa_recovery TEXT NOT NULL,
+                    lock_status INTEGER NOT NULL
                 )
             """)
             self.cur.execute("""
@@ -133,17 +133,15 @@ class Database:
             self.cur.execute("""
                 CREATE TABLE email_links (
                     id TEXT NOT NULL UNIQUE PRIMARY KEY,
-                    token TEXT NOT NULL UNIQUE,
-                    expires INTEGER NOT NULL,
-                    revoked INTEGER NOT NULL,
                     user TEXT NOT NULL,
                     email TEXT NOT NULL,
-                    action TEXT NOT NULL
+                    action TEXT NOT NULL,
+                    expires INTEGER NOT NULL
                 )
             """)
             self.cur.execute("""
-                CREATE INDEX email_token ON email_links (
-                    token
+                CREATE INDEX email_link_id ON email_links (
+                    id
                 )
             """)
             self.con.commit()
