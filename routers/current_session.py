@@ -1,33 +1,47 @@
-from util.supporter import check_username
-from util.ratelimits import auto_ratelimit, check_ratelimit, ratelimit
-from util.accounts import acc_from_username, acc_from_email, acc_from_mfa_token
-from util.emails import send_email
-from util.schemas.authentication import CreateAccount, LoginPassword, TOTP, PasswordRecovery, MFARecovery
-from fastapi import APIRouter, HTTPException, Request
+from util.sessions import check_auth
+from fastapi import APIRouter, Request, Depends
 
 
 router = APIRouter(
     prefix="/session",
-    tags=["Sessions"]
+    tags=["Sessions"],
+    dependencies=[Depends(check_auth)]
 )
 
 
 @router.get("/")
-async def get_session(request:Request):
+async def get_session(req:Request):
     """
     Get details about the current session.
     """
 
+    return {
+        "id": req.session.id,
+        "user": req.session.user,
+        "client": req.session.client,
+        "expires": req.session.expires
+    }
 
-@router.delete("/refresh")
-async def refresh_session(request:Request):
+
+@router.delete("/")
+async def revoke_session(req:Request):
+    """
+    Revoke current session.
+    """
+
+    req.session.revoke()
+    return "OK"
+
+
+@router.post("/refresh")
+async def refresh_session(req:Request):
     """
     Refresh current session.
     """
 
-
-@router.delete("/revoke")
-async def revoke_session(request:Request):
-    """
-    Revoke current session.
-    """
+    auth_token, main_token = req.session.refresh(req.client.info)
+    return {
+        "id": req.session.id,
+        "auth_token": auth_token,
+        "main_token": main_token
+    }

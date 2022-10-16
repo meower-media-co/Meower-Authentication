@@ -1,7 +1,10 @@
+from util.supporter import log
 from pymongo import MongoClient
 from redis import Redis
 import sqlite3
 import os
+import time
+
 
 class Database:
     def __init__(self):
@@ -13,8 +16,9 @@ class Database:
             )
             self.mongo = mongo_client[os.getenv("MONGODB_NAME", "meowerserver")]
             self.mongo.command("ping")
-        except:
-            print("Failed to connect to the MongoDB server.")
+            log.success("MongoDB Connected!")
+        except Exception as err:
+            log.error(f"MongoDB failed to connect: {str(err)}")
             exit()
 
         # Initialize Redis database connection
@@ -26,24 +30,28 @@ class Database:
                 password = os.getenv("REDIS_PASSWORD", None),
                 db = int(os.getenv("REDIS_DB", 0))
             )
+            log.success("Redis Connected!")
         except Exception as error:
-            print(f"Failed to connect to the Redis server\n{str(error)}")
+            log.error(f"Redis failed to connect: {str(err)}")
             exit()
 
         # Initialize SQLite persistent database connection
         try:
             self.con = sqlite3.connect(os.environ.get("DB", "meowerauth.db"))
             self.cur = self.con.cursor()
-        except:
-            print("Failed to connect to the persistent SQLite database.")
+            log.success("SQLite Connected!")
+        except Exception as err:
+            log.error(f"SQLite failed to connect: {str(err)}")
             exit()
 
         # Initialize SQLite in-memory database connection
         try:
             self.mem = sqlite3.connect("file::memory:?cache=shared").cursor()
-        except:
-            print("Failed to connect to the in-memory SQLite database.")
+            log.success("Memory DB Connected!")
+        except Exception as err:
+            log.error(f"Memory DB failed to connect: {str(err)}")
             exit()
+
 
     def _setup_mongo(self):
         # Create users collection
@@ -60,6 +68,7 @@ class Database:
                 "_id"
             ]:
                 self.mongo.sessions.create_index(index_name)
+
 
     def _setup_sqlite(self):
         # Attempt to create the accounts table
@@ -91,21 +100,21 @@ class Database:
                     email
                 )
             """)
-            self.con.commit()
-            print("Created 'accounts' table!")
-        except:
-            pass
+            log.success("Created 'accounts' table")
+        except Exception as err:
+            log.error(f"Error making 'accounts' table: {str(err)}")
 
         # Attempt to create the sessions table
         try:
             self.cur.execute("""
                 CREATE TABLE sessions (
                     id TEXT NOT NULL UNIQUE PRIMARY KEY,
-                    token TEXT NOT NULL UNIQUE,
+                    auth_hash TEXT NOT NULL UNIQUE,
+                    main_hash TEXT NOT NULL UNIQUE,
                     user TEXT NOT NULL,
                     client TEXT NOT NULL,
-                    created INTEGER NOT NULL,
-                    ttl INTEGER NOT NULL
+                    refreshed REAL NOT NULL,
+                    expires REAL NOT NULL
                 )
             """)
             self.cur.execute("""
@@ -123,10 +132,9 @@ class Database:
                     user
                 )
             """)
-            self.con.commit()
-            print("Created 'sessions' table!")
-        except:
-            pass
+            log.success("Created 'sessions' table")
+        except Exception as err:
+            log.error(f"Error making 'sessions' table: {str(err)}")
 
         # Attempt to create the email links table
         try:
@@ -144,11 +152,10 @@ class Database:
                     id
                 )
             """)
-            self.con.commit()
-            print("Created 'email_links' table!")
-        except:
-            pass
-        
+            log.success("Created 'email_links' table")
+        except Exception as err:
+            log.error(f"Error making 'email_links' table: {str(err)}")
+
         # Attempt to create the logs table
         try:
             self.cur.execute("""
@@ -162,29 +169,60 @@ class Database:
                     ip TEXT
                 )
             """)
-            self.cur.execute("""
-                CREATE INDEX logs_action ON logs (
-                    action
+            log.success("Created 'logs' table")
+        except Exception as err:
+            log.error(f"Error making 'logs' table: {str(err)}")
+
+        # Attempt to create the ratelimits table
+        try:
+            db.mem.execute("""
+                CREATE TABLE ratelimits (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    remaining INTEGER NOT NULL,
+                    reset REAL NOT NULL
                 )
             """)
-            self.cur.execute("""
-                CREATE INDEX logs_user ON logs (
-                    user
+            log.success("Created 'ratelimits' table")
+        except Exception as err:
+            log.error(f"Error making 'ratelimits' table: {str(err)}")
+            exit()
+        
+        # Attempt to create the mfa table (in-memory)
+        try:
+            db.mem.execute("""
+                CREATE TABLE mfa (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    user TEXT NOT NULL,
+                    expires REAL NOT NULL
                 )
             """)
-            self.cur.execute("""
-                CREATE INDEX logs_email ON logs (
-                    email
-                )
-            """)
-            self.cur.execute("""
-                CREATE INDEX logs_ip ON logs (
-                    ip
-                )
-            """)
-            self.con.commit()
-            print("Created 'logs' table!")
-        except:
-            pass
+            log.success("Created 'mfa' table")
+        except Exception as err:
+            log.error(f"Error making 'mfa' table: {str(err)}")
+            exit()
+    
+
+    def background_cleanup(db):
+        while True:
+            time.sleep(60)
+
+            db.mem.execute("DELETE FROM ratelimits WHERE reset <= ?", (time.time(),))
+            db.mem.execute("DELETE FROM mfa WHERE expires <= ?", (time.time(),))
+
+            users_to_purge = db.cur.execute("SELECT id FROM pending_deletion WHERE after <= ?", (time.time(),)).fetchall()
+            for row in users_to_purge:
+                userid = row[0]
+                db.mongo.users.update_one({"_id": userid}, {"$set": {
+                    "username": f"Deleted-{userid}",
+                    "username_lower": f"deleted-{userid}",
+                    "flags": 0,
+                    "admin": 0,
+                    "config": 0,
+                    "custom_theme": {},
+                    "quote": ""
+                }}, {"writeConcern": {"w": "majority", "wtimeout": 5000}})
+                db.cur.execute("DELETE FROM accounts WHERE id = ?", (userid,))
+                db.con.commit()
+
 
 db = Database()

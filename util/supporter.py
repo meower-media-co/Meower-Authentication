@@ -6,42 +6,59 @@ import time
 import json
 import string
 
+
 # Allowed characters within usernames
 ALLOWED_USERNAME_CHARS = ["-", "_", "."]
 ALLOWED_USERNAME_CHARS += string.ascii_letters
 ALLOWED_USERNAME_CHARS += string.digits
 
+
 # Incremental counter for snowflakes
 id_increment = 0
+
 
 class PrintColors:
     """
     Nice colors used for when printing logs to the console.
     """
 
-    HEADER = "\033[95m"
-    OK = "\033[92m"
-    INFO = "\033[93m"
-    ERROR = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
     END = "\033[0m"
 
-def log(prefix:str, log_type:int, msg:str):
-    # Create prefix
-    prefix = f"{[PrintColors.OK, PrintColors.INFO, PrintColors.ERROR][log_type]}[{['SUCCESS', 'INFO', 'ERROR'][log_type]}]{PrintColors.END} {PrintColors.HEADER}[{prefix}]{PrintColors.END}"
 
-    # Create timestamp
-    timestamp = datetime.now().strftime("%m/%d/%Y %H:%M.%S")
+class log:
+    def success(event:str):
+        print(PrintColors.GREEN, "[{0}]".format(datetime.now().strftime("%m/%d/%Y %H:%M.%S")), "[ERROR]", event, PrintColors.END)
 
-    # Print log
-    print(f"{prefix} {timestamp}: {msg}")
 
-def add_log(action:str, details:dict, user:str = None, email:str = None, ip:str = None):
-    def run():
-        db.cur.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)", (snowflake(), int(time.time()), json.dumps(details), action, details, user, email, ip,))
-        db.con.commit()
-    
-    # Thread the main runner so it doesn't hold up the main process
-    Thread(target=run).start()
+    def info(event:str):
+        print("[{0}]".format(datetime.now().strftime("%m/%d/%Y %H:%M.%S")), "[INFO]", event)
+
+
+    def warning(event:str):
+        print(PrintColors.YELLOW, "[{0}]".format(datetime.now().strftime("%m/%d/%Y %H:%M.%S")), "[WARNING]", event, PrintColors.END)
+
+
+    def error(event:str):
+        print(PrintColors.RED, "[{0}]".format(datetime.now().strftime("%m/%d/%Y %H:%M.%S")), "[ERROR]", event, PrintColors.END)
+
+
+    def store(event:str, details:dict = {}):
+        """
+        Stores a log in the database, these logs are not meant
+        to be easily filtered by humans and are there just in case
+        something goes bad and someone needs to review them.
+        """
+
+        def run():
+            db.cur.execute("INSERT INTO logs VALUES (?, ?, ?, ?)", (None, int(time.time()), event, json.dumps(details),))
+            db.con.commit()
+        
+        # Thread the main runner so it doesn't hold up the main process
+        Thread(target = run).start()
+
 
 def snowflake():
     """
@@ -59,6 +76,7 @@ def snowflake():
 
     # Generate and return uid
     return (str(time()) + str(os.getenv("SERVER_ID", "0")) + str(os.getpid()) + str(id_increment))
+
 
 def check_username(username:str):
     """

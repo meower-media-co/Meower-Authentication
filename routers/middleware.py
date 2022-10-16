@@ -6,9 +6,6 @@ import os
 
 
 async def middleware_dispatch(request:Request, call_next):
-    # Check ratelimit
-    auto_ratelimit("global", request.client.host, 50, 30)
-
     # Initialize start time and client info object
     req_start_time = time.time()
     request.client.info = {}
@@ -29,6 +26,9 @@ async def middleware_dispatch(request:Request, call_next):
         request.client.info["ip"] = request.headers.get("X-Forwarded-For")
     else:
         request.client.info["ip"] = request.client.host
+
+    # Check ratelimit
+    auto_ratelimit("global", request.client.info["ip"], 30, 60)
 
     # Finish request
     resp = await call_next(request)

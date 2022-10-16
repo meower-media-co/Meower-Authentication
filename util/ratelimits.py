@@ -1,7 +1,7 @@
 from util.supporter import log
 from util.database import db
 from fastapi import HTTPException
-from time import time
+import time
 from threading import Thread
 import requests
 import os
@@ -34,42 +34,11 @@ Buckets:
 """
 
 
-# Attempt to create the in-memory ratelimit tables
-try:
-    db.mem.execute("""
-        CREATE TABLE ratelimits (
-            id TEXT NOT NULL PRIMARY KEY,
-            remaining INTEGER NOT NULL,
-            reset REAL NOT NULL,
-            captcha_lock INTEGER NOT NULL
-        )
-    """)
-    db.mem.execute("""
-        CREATE INDEX ratelimit_id ON ratelimits (
-            id
-        )
-    """)
-    db.mem.execute("""
-        CREATE TABLE captcha_locked (
-            id TEXT NOT NULL PRIMARY KEY
-        )
-    """)
-except Exception as err:
-    log("Memory DB", 1, f"Error making table: {str(err)}")
-
-
-def background_cleanup():
-    while True:
-        time.sleep(60)
-        db.mem.execute("DELETE FROM ratelimits WHERE reset <= ?", (time(),))
-        log("Memory DB", 1, "Cleared expired ratelimits.")
-
-
 def check_captcha(token:str):
     # Set captcha provider
     captcha_provider = os.getenv("CAPTCHA_PROVIDER", None)
     if captcha_provider is None:
-        log("Captcha", 1, "No captcha provider set! Please set one to help stop bots.")
+        log.warning("No captcha provider set! Please set one to help stop bots.")
         return True
     elif captcha_provider == "turnstile":
         api_uri = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -101,7 +70,7 @@ def check_ratelimit(bucket:str, identifier:str):
     ratelimit_obj = db.mem.execute("SELECT * FROM ratelimits WHERE id = ?", (ratelimit_id,)).fetchone()
 
     # Return status
-    if (ratelimit_obj is None) or (ratelimit[2] <= time()):
+    if (ratelimit_obj is None) or (ratelimit[2] <= time.time()):
         return False
     elif ratelimit_obj[1] <= 0:
         return True
@@ -109,35 +78,7 @@ def check_ratelimit(bucket:str, identifier:str):
         return False
 
 
-def check_captcha_lock(bucket:str, identifier:str):
-    """
-    Check whether an identifier on a bucket is captcha locked.
-    """
-
-    # Initialize variables
-    ratelimit_id = (str(bucket) + str(identifier))
-
-    # Get captcha lock
-    captcha_lock = db.mem.execute("SELECT * FROM captcha_locked WHERE id = ?", (ratelimit_id,)).fetchone()
-
-    return (captcha_lock is not None)
-
-
-def remove_captcha_lock(bucket:str, identifier:str):
-    """
-    Remove a captcha lock.
-    """
-
-    # Initialize variables
-    ratelimit_id = (str(bucket) + str(identifier))
-
-    # Delete captcha lock from in-memory db
-    db.mem.execute("DELETE FROM captcha_locked WHERE id = ?", (ratelimit_id,))
-
-    return True
-
-
-def ratelimit(bucket:str, identifier:str, limit:int, ttl:int, captcha_lock:bool = False):
+def ratelimit(bucket:str, identifier:str, limit:int, ttl:int):
     """
     Create/update a ratelimit.
 
@@ -149,36 +90,26 @@ def ratelimit(bucket:str, identifier:str, limit:int, ttl:int, captcha_lock:bool 
     ratelimit_obj = db.mem.execute("SELECT * FROM ratelimits WHERE id = ?", (ratelimit_id,)).fetchone()
 
     # Check ratelimit status
-    if (ratelimit_obj is None) or (ratelimit[2] <= (time() + ttl)):  # Check if ratelimit doesn't exist or has expired
-        ratelimit_obj = (ratelimit_id, (limit - 1), (time() + ttl))
-        db.mem.execute("INSERT INTO ratelimits VALUES (?, ?, ?, ?)", (ratelimit_obj, captcha_lock,))
+    if (ratelimit_obj is None) or (ratelimit[2] <= (time.time() + ttl)):  # Check if ratelimit doesn't exist or has expired
+        ratelimit_obj = (ratelimit_id, (limit - 1), (time.time() + ttl))
+        db.mem.execute("INSERT INTO ratelimits VALUES (?, ?, ?)", ratelimit_obj)
+
         return True
     elif ratelimit_obj[1] > 0:  # Check if limit has been reached
         ratelimit_obj[1] -= 1
         db.mem.execute("UPDATE ratelimits SET remaining = ? WHERE id = ?", (ratelimit_obj[1], ratelimit_id,))
-
-        if ratelimit_obj[3] == 1:
-            db.mem.execute("INSERT INTO captcha_locked VALUES (?)", (ratelimit_id,))
 
         return True
     else:
         return False
 
 
-def auto_ratelimit(bucket:str, identifier:str, limit:int, ttl:int, captcha_lock:bool = False):
+def auto_ratelimit(bucket:str, identifier:str, limit:int, ttl:int):
     """
     Automatically check and update ratelimit, raise HTTPException if identifier is ratelimited.
     """
 
-    if check_captcha_lock(bucket, identifier):
-        raise HTTPException(status_code = 429, detail = "You need to verify a captcha to continue.")
-    elif check_ratelimit(bucket, identifier):
+    if check_ratelimit(bucket, identifier):
         raise HTTPException(status_code = 429, detail = "You are being ratelimited.")
     else:
-        ratelimit(bucket, identifier, limit, ttl, captcha_lock = captcha_lock)
-
-
-# Start cleanup thread
-cleanup_thread = Thread(target=background_cleanup)
-cleanup_thread.daemon = True
-cleanup_thread.start()
+        ratelimit(bucket, identifier, limit, ttl)

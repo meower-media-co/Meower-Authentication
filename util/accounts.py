@@ -1,5 +1,5 @@
 from util.database import db
-from util.supporter import log, add_log, snowflake
+from util.supporter import log, snowflake
 from hashlib import sha256
 from passlib.hash import bcrypt
 from pyotp import TOTP
@@ -7,13 +7,14 @@ import json
 import time
 import secrets
 import string
+import os
 
 
 RECOVERY_CODE_CHARS = (string.ascii_lowercase + string.digits)
 
 
 class Account:
-    def __init__(self, userdata):
+    def __init__(self, userdata:tuple):
         self._exists = (userdata is not None)
         
         if self._exists:
@@ -43,7 +44,7 @@ class Account:
         self._exists = True
         self.id = snowflake()
         self.username = username.lower()
-        self.password = bcrypt.hash(password, salt = 16)
+        self.password = bcrypt.hash(password, salt = int(os.getenv("SALT_STRENGTH", 16)))
 
         # Insert account into Mongo database
         db.mongo.users.insert_one({
@@ -195,16 +196,18 @@ class Account:
 
         # Create auth and main token hashes
         hashed_auth_token = sha256(auth_token.encode()).hexdigest()
-        hashed_main_token = sha256(main_token.encode()).hexdigest()
+        hashed_main_token = sha256(main_token.encode()).hexdigest()[:16]
 
         # Insert auth token into SQLite database
-        db.cur.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)", (session_id, hashed_auth_token, self.id, json.dumps(client), time.time(), (time.time() + 7890000),))
+        db.cur.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)", (session_id, hashed_auth_token, hashed_main_token, self.id, json.dumps(client), time.time(), (time.time() + 7890000),))
         db.con.commit()
+
+        # Insert main token into Redis
+        db.redis.set(f"auth:{hashed_main_token}", self.user, ex = 3600)
 
         # Insert main token into Mongo database
         db.mongo.sessions.insert_one({
-            "_id": session_id,
-            "token": hashed_main_token,
+            "_id": hashed_main_token,
             "user": self.id,
             "ttl": (time.time() + 3600)
         }, {"writeConcern": {"w": "majority", "wtimeout": 5000}})
@@ -220,9 +223,8 @@ class Account:
         # Create token hash
         hashed_token = sha256(token.encode()).hexdigest()
 
-        # Insert token into SQLite database
-        db.cur.execute("INSERT INTO mfa_sessions VALUES (?, ?, ?, ?, ?)", (snowflake(), hashed_token, self.id, time.time(), (time.time() + 600),))
-        db.con.commit()
+        # Insert token into in-memory database
+        db.mem.execute("INSERT INTO mfa VALUES (?, ?, ?)", (hashed_token, self.id, (time.time() + 600),))
 
         # Return token
         return token
@@ -245,10 +247,10 @@ class Account:
 
 def acc_from_id(userid:str):
     # Get account data
-    userdata = db.cur.execute("SELECT * FROM accounts WHERE id = ?", (userid.lower(),)).fetchone()
+    userdata = db.cur.execute("SELECT * FROM accounts WHERE id = ?", (userid,)).fetchone()
 
     # Add log
-    add_log("got_account", {"method": "id"}, user = userdata[0])
+    log.store("got_account", {"method": "id", "user": userdata[0]})
 
     # Return account
     return Account(userdata)
@@ -259,7 +261,7 @@ def acc_from_username(username:str):
     userdata = db.cur.execute("SELECT * FROM accounts WHERE username = ?", (username.lower(),)).fetchone()
 
     # Add log
-    add_log("got_account", {"method": "username"}, user = userdata[0])
+    log.store("got_account", {"method": "username", "user": userdata[0]})
 
     # Return account
     return Account(userdata)
@@ -270,24 +272,7 @@ def acc_from_email(email:str):
     userdata = db.cur.execute("SELECT * FROM accounts WHERE email = ?", (email.lower(),)).fetchone()
 
     # Add log
-    add_log("got_account", {"method": "email"}, user = userdata[0])
-
-    # Return account
-    return Account(userdata)
-
-
-def acc_from_session_token(token:str):
-    # Hash token
-    hashed_token = sha256(token.encode()).hexdigest()
-
-    # Get session data
-    session_data = db.cur.execute("SELECT * FROM sessions WHERE token = ?", (hashed_token,)).fetchone()
-
-    # Get account data
-    userdata = db.cur.execute("SELECT * FROM accounts WHERE id = ?", (session_data[2],)).fetchone()
-
-    # Add log
-    add_log("got_account", {"method": "session_token"}, user = userdata[0])
+    log.store("got_account", {"method": "email", "user": userdata[0]})
 
     # Return account
     return Account(userdata)
@@ -298,30 +283,15 @@ def acc_from_mfa_token(token:str):
     hashed_token = sha256(token.encode()).hexdigest()
 
     # Get session data
-    session_data = db.cur.execute("SELECT * FROM totp_sessions WHERE token = ?", (hashed_token,)).fetchone()
+    token_data = db.mem.execute("SELECT * FROM mfa WHERE id = ?", (hashed_token,)).fetchone()
+    if int(time.time()) > token_data[2]:
+        return Account(None)
 
     # Get account data
-    userdata = db.cur.execute("SELECT * FROM accounts WHERE id = ?", (session_data[2],)).fetchone()
+    userdata = db.cur.execute("SELECT * FROM accounts WHERE id = ?", (token_data[1],)).fetchone()
 
     # Add log
-    add_log("got_account", {"method": "totp_token"}, user = userdata[0])
-
-    # Return account
-    return Account(userdata)
-
-
-def acc_from_email_token(token:str):
-    # Hash token
-    hashed_token = sha256(token.encode()).hexdigest()
-
-    # Get session data
-    session_data = db.cur.execute("SELECT * FROM email_sessions WHERE token = ?", (hashed_token,)).fetchone()
-
-    # Get account data
-    userdata = db.cur.execute("SELECT * FROM accounts WHERE id = ?", (session_data[2],)).fetchone()
-
-    # Add log
-    add_log("got_account", {"method": "email_token"}, user = userdata[0])
+    log.store("got_account", {"method": "mfa_token", "user": userdata[0]})
 
     # Return account
     return Account(userdata)
