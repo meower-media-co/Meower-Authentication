@@ -9,22 +9,19 @@ TEMPLATES = {
         "subject": "Verify your email address",
         "file": "verify_email.html",
         "fields": ["username"],
-        "link": True,
-        "link_ttl": 86400
+        "link": True
     },
     "verify_child": {
         "subject": "Verify your child's Meower account",
         "file": "verify_child.html",
         "fields": ["username"],
-        "link": True,
-        "link_ttl": 2592000
+        "link": True
     },
     "reset_password": {
         "subject": "Reset your Meower password",
         "file": "reset_password.html",
         "fields": ["username"],
-        "link": True,
-        "link_ttl": 86400
+        "link": True
     }
 }
 

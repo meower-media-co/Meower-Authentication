@@ -1,16 +1,16 @@
 from util.database import db
-from util.sessions import Session, check_auth
+from util.sessions import Session, check_auth, revoke_all_sessions
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 
 router = APIRouter(
-    prefix="/settings",
-    tags=["Settings"],
+    prefix="/account/sessions",
+    tags=["Account Settings"],
     dependencies=[Depends(check_auth)]
 )
 
 
-@router.get("/sessions")
+@router.get("/")
 async def get_all_sessions(req:Request):
     """
     Get details about all sessions.
@@ -32,7 +32,7 @@ async def get_all_sessions(req:Request):
     return parsed_sessions
 
 
-@router.get("/sessions/{session_id}")
+@router.get("/{session_id}")
 async def get_session(req:Request, session_id):
     """
     Get details about a specific session.
@@ -41,7 +41,7 @@ async def get_session(req:Request, session_id):
     # Get session details
     session = Session(session_id)
     if (not session._valid) or (session.user != req.session.user.id):
-        raise HTTPException(status_code = 404, detail = "Session not found")
+        raise HTTPException(status_code = 400, detail = "Unknown session")
     
     # Return session data
     return {
@@ -51,7 +51,7 @@ async def get_session(req:Request, session_id):
     }
 
 
-@router.delete("/sessions/{session_id}")
+@router.delete("/{session_id}")
 async def revoke_session(req:Request, session_id):
     """
     Revoke a specific session.
@@ -60,9 +60,21 @@ async def revoke_session(req:Request, session_id):
     # Get session details
     session = Session(session_id)
     if (not session._valid) or (session.user != req.session.user.id):
-        raise HTTPException(status_code = 404, detail = "Session not found")
+        raise HTTPException(status_code = 400, detail = "Unknown session")
     
     # Revoke session
     session.revoke()
+
+    return "OK"
+
+
+@router.post("/revoke-all")
+async def revoke_all(req:Request):
+    """
+    Revoke all sessions.
+    """
+
+    # Revoke all sessions
+    revoke_all_sessions(req.session.user)
 
     return "OK"

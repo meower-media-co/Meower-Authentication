@@ -93,3 +93,18 @@ def check_username(username:str):
             return True
 
     return False
+
+def check_email(email:str):
+    """
+    Make sure length of email is within range, is a valid email, and doesn't contain any illegal characters.
+    """
+
+    # Check if email has required seperators
+    if (email.count("@") != 1) or ("." not in email.split("@")[1]):
+        return True
+
+    # Check if email is not within length limits
+    if (len(email) < 5) or (len(email) > 255):
+        return True
+
+    return False

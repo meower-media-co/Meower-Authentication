@@ -44,7 +44,7 @@ class Account:
         self._exists = True
         self.id = snowflake()
         self.username = username.lower()
-        self.password = bcrypt.hash(password, salt = int(os.getenv("SALT_STRENGTH", 16)))
+        self.password = bcrypt.hash(password, salt = int(os.getenv("SALT_STRENGTH", 14)))
 
         # Insert account into Mongo database
         db.mongo.users.insert_one({
@@ -95,7 +95,7 @@ class Account:
 
     def update_password(self, password:str):
         # Hash new password and update attribute
-        self.password = bcrypt.hash(password)
+        self.password = bcrypt.hash(password, salt = int(os.getenv("SALT_STRENGTH", 14)))
 
         # Update password in database
         db.cur.execute("UPDATE accounts SET password = ? WHERE id = ?", (self.password, self.id,))
@@ -108,7 +108,8 @@ class Account:
         # Verify and add TOTP code
         try:
             if TOTP(secret).verify(code):
-                self.totp.append({"id": snowflake(), "name": nickname, "secret": secret})
+                authenticator_id = snowflake()
+                self.totp.append({"id": authenticator_id, "name": nickname, "secret": secret})
                 db.cur.execute("UPDATE accounts SET totp = ? WHERE id = ?", (json.dumps(self.totp), self.id,))
                 db.con.commit()
                 return True
@@ -118,10 +119,10 @@ class Account:
             return False
 
 
-    def remove_totp(self, _id:str):
+    def remove_totp(self, authenticator_id:str):
         # Loop through authenticators and find authenticator to remove
         for authenticator in self.totp:
-            if authenticator["id"] == _id:
+            if authenticator["id"] == authenticator_id:
                 self.totp.remove(authenticator)
                 db.cur.execute("UPDATE accounts SET totp = ? WHERE id = ?", (json.dumps(self.totp), self.id,))
                 db.con.commit()

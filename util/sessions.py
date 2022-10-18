@@ -1,5 +1,6 @@
 from util.database import db
 from util.accounts import acc_from_id
+from util.schemas.settings import ExtraAuth
 from fastapi import HTTPException, Request, Header
 from hashlib import sha256
 import time
@@ -82,17 +83,15 @@ class Session:
         if not self._valid:
             return
 
-        # Delete from Mongo
-        db.mongo.sessions.delete_one({"_id": self.id})
-
-        # Delete from Redis
-        db.redis.delete(f"auth:{self.main_hash}")
-
         # Delete from SQLite
         db.cur.execute("DELETE FROM sessions WHERE id = ?", (self.id,))
         db.con.commit()
 
-        # Publish to Redis
+        # Delete from Mongo
+        db.mongo.sessions.delete_one({"_id": self.id})
+
+        # Delete from Redis and publish to pubsub
+        db.redis.delete(f"auth:{self.main_hash}")
         db.redis.publish(os.getenv("REDIS_CHANNEL", "org.meower"), json.dumps({"op": "revoke_session", "val": self.id}))
 
         # Clear values
@@ -107,6 +106,49 @@ def check_auth(req:Request, authorization:str = Header()):
     req.session = Session(authorization)
     if not req.session._valid:
         raise HTTPException(status_code = 401, detail="Unauthorized")
+
+
+async def check_extra_auth(req:Request, body:ExtraAuth):
+    """
+    Check additional authorization required for certain account settings.
+    """
+
+    if not req.session._valid:
+        raise HTTPException(status_code = 401, detail = "Unauthorized")
+
+    if (body.totp is not None) and (not req.session.user.verify_totp(body.totp)):
+        raise HTTPException(status_code = 401, detail = "Invalid TOTP")
+    elif (body.password is not None) and (not req.session.user.verify_password(body.password)):
+        raise HTTPException(status_code = 401, detail = "Invalid password")
+    else:
+        raise HTTPException(status_code = 400, detail = "No way to authenticate request")
+
+
+def revoke_all_sessions(userid:str):
+    """
+    Revoke all of a user's sessions.
+    """
+
+    # Get all session IDs and main hashes from the database
+    sessions_ids = []
+    main_hashes = []
+    sessions = db.cur.execute("SELECT id, main_hash FROM sessions WHERE user = ?", (userid,)).fetchall()
+    for item in sessions:
+        sessions_ids.append(item[0])
+        main_hashes.append(item[1])
+
+    # Delete from SQLite
+    for session_id in sessions_ids:
+        db.cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    db.con.commit()
+
+    # Delete from Mongo
+    db.mongo.sessions.delete_many({"_id": {"$in": main_hashes}})
+
+    # Delete from Redis and publish to pubsub
+    for hash in main_hashes:
+        db.redis.delete(f"auth:{hash}")
+        db.redis.publish(os.getenv("REDIS_CHANNEL", "org.meower"), json.dumps({"op": "revoke_session", "val": hash}))
 
 
 def get_email_link(token:str):

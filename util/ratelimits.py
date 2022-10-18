@@ -2,7 +2,6 @@ from util.supporter import log
 from util.database import db
 from fastapi import HTTPException
 import time
-from threading import Thread
 import requests
 import os
 
@@ -110,6 +109,6 @@ def auto_ratelimit(bucket:str, identifier:str, limit:int, ttl:int):
     """
 
     if check_ratelimit(bucket, identifier):
-        raise HTTPException(status_code = 429, detail = "You are being ratelimited.")
+        raise HTTPException(status_code = 429, detail = "You are being ratelimited")
     else:
         ratelimit(bucket, identifier, limit, ttl)
